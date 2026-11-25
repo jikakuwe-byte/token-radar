@@ -69,16 +69,30 @@
   // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and age
   // decide the action, the capital, the hold and every cost and time. No name is special-cased.
   function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
+  // The same two ladders main.ts climbs: farm capital by the protocol's TVL, and hold time by its
+  // age — young protocols wait longer to be counted in two snapshots, old ones are in all of them.
+  var CAPITAL_LADDER = [
+    { min_tvl: 5e9, capital: 250 },
+    { min_tvl: 1e9, capital: 150 },
+    { min_tvl: 1e8, capital: 100 },
+    { min_tvl: 0, capital: 50 }
+  ];
   function capitalFor(p) {
-    if (p.tvl_usd >= 5e9) return 250;
-    if (p.tvl_usd >= 1e9) return 150;
-    if (p.tvl_usd >= 1e8) return 100;
+    for (var i = 0; i < CAPITAL_LADDER.length; i++) {
+      if (p.tvl_usd >= CAPITAL_LADDER[i].min_tvl) return CAPITAL_LADDER[i].capital;
+    }
     return 50;
   }
+  var HOLD_LADDER = [
+    { max_age: 180, hold: 60 },
+    { max_age: 365, hold: 45 },
+    { max_age: Infinity, hold: 30 }
+  ];
   function holdDaysFor(age) {
     if (age === null || age === undefined) return 30;
-    if (age < 180) return 60;
-    if (age < 365) return 45;
+    for (var i = 0; i < HOLD_LADDER.length; i++) {
+      if (age < HOLD_LADDER[i].max_age) return HOLD_LADDER[i].hold;
+    }
     return 30;
   }
   // The category rules behind the farm plan's main action, the same table main.ts writes to
@@ -169,15 +183,20 @@
       return hay.indexOf(q) >= 0;
     });
   }
+  // One extractor per sortable column. Missing figures sort as extremes, never as zeroes: an
+  // unknown growth is the worst growth on the board, an unknown age the oldest.
+  var SORT_KEYS = {
+    name: function (r) { return r.name.toLowerCase(); },
+    tvl: function (r) { return r.tvl_usd; },
+    growth: function (r) { return r.change_7d === null ? -Infinity : r.change_7d; },
+    age: function (r) { return r.age_days === null ? Infinity : r.age_days; },
+    implied: function (r) { return r.implied_value_usd; }
+  };
   function sortedRows(list) {
-    var key = state.sort;
+    var keyOf = SORT_KEYS[state.sort] || SORT_KEYS.implied;
     return list.slice().sort(function (a, b) {
-      var av, bv;
-      if (key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
-      else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
-      else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
-      else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
-      else { av = a.implied_value_usd; bv = b.implied_value_usd; }
+      var av = keyOf(a);
+      var bv = keyOf(b);
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
       return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;

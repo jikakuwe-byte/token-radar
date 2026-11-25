@@ -48,17 +48,29 @@ export interface Snapshot {
 
 /** The model's constants, as the dashboard states them and the sandbox may change them. */
 export interface ModelConstants {
+  /** How much of the (clamped) seven-day growth feeds the growth multiplier. */
   growth_weight: number;
+  /** The growth clamp, in per cent: a crash week counts at most this much against a row. */
   growth_floor: number;
+  /** The growth clamp's top: a parabolic week counts at most this much for a row. */
   growth_cap: number;
+  /** The maturity multiplier of a protocol listed today. */
   maturity_floor: number;
+  /** How much maturity a full `maturity_days` of age adds on top of the floor. */
   maturity_range: number;
+  /** The age, in days, at which the maturity multiplier stops growing. */
   maturity_days: number;
+  /** The age the model assumes when the snapshot records no listing date. */
   unknown_age_days: number;
+  /** The lowest peer multiple a row may be anchored to, however cheap its peers trade. */
   peer_floor: number;
+  /** The highest peer multiple a row may be anchored to, however rich its peers trade. */
   peer_cap: number;
+  /** How many live protocols a category needs before its own median anchors its rows. */
   peer_min_sample: number;
+  /** The breadth multiplier's gain for each extra chain, up to the cap below. */
   breadth_step: number;
+  /** How many extra chains the breadth multiplier rewards. */
   breadth_max_extra_chains: number;
 }
 
@@ -297,24 +309,31 @@ export interface BoardSummary {
   live_size: number;
 }
 
-/** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+/**
+ * The protocols the board ranks, before any scoring: the whole watchlist first (the floor, never a
+ * ceiling — every slug, even one the snapshot no longer carries; it cannot, but the board's coverage
+ * is the gate's row and is never gambled on a missing record), then the early radar: rankable
+ * pre-token protocols below the floor, by TVL, capped at EARLY_ROWS. An early row never replaces a
+ * watchlist row: a chosen protocol stays chosen.
+ */
+function chooseProtocols(snapshot: Snapshot): Map<string, SnapshotProtocol> {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
-  // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
-  // board's coverage is the gate's row and is never gambled on a missing record).
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a replacement
-  // for a watchlist row: a chosen protocol stays chosen.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
+  return chosen;
+}
 
+/** The protocols the board ranks, strongest first, with ranks 1..n. */
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+  const chosen = chooseProtocols(snapshot);
   const peers = peerMultiples(snapshot, model);
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, model, peers);
@@ -366,19 +385,39 @@ function chainOf(p: SnapshotProtocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
 }
 
+/**
+ * The farm capital ladder: the smallest position that still looks like real usage at each size of
+ * protocol. Bigger protocols clear activity thresholds with bigger positions; the smallest tier is
+ * the floor every farm on the board can afford.
+ */
+const CAPITAL_LADDER: { min_tvl_usd: number; capital: number }[] = [
+  { min_tvl_usd: 5_000_000_000, capital: 250 },
+  { min_tvl_usd: 1_000_000_000, capital: 150 },
+  { min_tvl_usd: 100_000_000, capital: 100 },
+  { min_tvl_usd: 0, capital: 50 },
+];
+
 /** How much capital one farm position needs, from the protocol's own TVL. */
 function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 5_000_000_000) return 250;
-  if (p.tvl_usd >= 1_000_000_000) return 150;
-  if (p.tvl_usd >= 100_000_000) return 100;
+  for (const rung of CAPITAL_LADDER) if (p.tvl_usd >= rung.min_tvl_usd) return rung.capital;
   return 50;
 }
 
-/** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
+/**
+ * The hold ladder, from the protocol's age: a young protocol's snapshots are sparse, so its farm
+ * waits longer to be counted twice; an old protocol is in every snapshot already and needs only
+ * the standard month. An unknown age takes the standard month too.
+ */
+const HOLD_LADDER: { max_age_days: number; hold_days: number }[] = [
+  { max_age_days: 180, hold_days: 60 },
+  { max_age_days: 365, hold_days: 45 },
+  { max_age_days: Number.POSITIVE_INFINITY, hold_days: 30 },
+];
+
+/** How long to hold, from the protocol's age. */
 function holdDaysFor(age: number | null): number {
   if (age === null) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
+  for (const rung of HOLD_LADDER) if (age < rung.max_age_days) return rung.hold_days;
   return 30;
 }
 

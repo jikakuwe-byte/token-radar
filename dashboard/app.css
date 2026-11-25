@@ -167,6 +167,19 @@ caption { text-align: left; padding: var(--step-3); caption-side: top; }
   h1 { font-size: 24px; }
 }
 
+/* Print: the board is the document. Controls, the drawer and the dark canvas go away; what is
+   left is the ranking, the model and the coverage, in ink on paper. */
+@media print {
+  body { background: #ffffff; color: #111111; }
+  .controls, .detail, .skip { display: none; }
+  .panel, .fact, .lede, .top { border-color: #cccccc; }
+  .panel { break-inside: avoid; }
+  tbody tr { cursor: default; }
+  .bar { background: #eeeeee; }
+  .bar i { background: #333333; }
+  a { color: #111111; text-decoration: none; }
+}
+
 @media (max-width: 900px) {
   .shell { padding: var(--step-4); }
   .lede { grid-template-columns: 1fr; gap: var(--step-4); }

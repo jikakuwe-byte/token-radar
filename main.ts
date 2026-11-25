@@ -57,19 +57,19 @@ mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
 writeFileSync(join(out, 'data.js'), dataScript(radar));
 
-/** Copy one directory's regular files into `to`, skipping names that start with a dot. */
-function copyFiles(from: string, to: string): string[] {
+/** The regular files directly inside `from`, dotfiles skipped, in the directory's own order. */
+function regularFiles(from: string): string[] {
   if (!existsSync(from)) return [];
+  return readdirSync(from).filter((name) => !name.startsWith('.') && statSync(join(from, name)).isFile());
+}
+
+/** Copy one directory's regular files into `to`, and name what was copied. */
+function copyFiles(from: string, to: string): string[] {
+  const names = regularFiles(from);
+  if (names.length === 0) return [];
   mkdirSync(to, { recursive: true });
-  const copied: string[] = [];
-  for (const name of readdirSync(from)) {
-    if (name.startsWith('.')) continue;
-    const path = join(from, name);
-    if (!statSync(path).isFile()) continue;
-    copyFileSync(path, join(to, name));
-    copied.push(name);
-  }
-  return copied;
+  for (const name of names) copyFileSync(join(from, name), join(to, name));
+  return names;
 }
 
 copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));

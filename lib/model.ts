@@ -93,7 +93,12 @@ export interface FarmStep {
   time: string;
 }
 
-/** One row of board.json: the ranked board's row. */
+/**
+ * One row of board.json: the ranked board's row. The first eleven fields are the snapshot's own
+ * record, carried through unchanged; the rest are the model's work — the age it derived, the value
+ * it implied, the exact multipliers that produced that value (so anyone can recompute the row from
+ * the snapshot figures alone), and the farm plan as finished strings.
+ */
 export interface BoardRow {
   rank: number;
   slug: string;
@@ -110,7 +115,9 @@ export interface BoardRow {
   age_days: number | null;
   implied_value_usd: number;
   model: {
+    /** The peer anchor this row was priced from, at full precision (see buildBoard). */
     peer_multiple: number;
+    /** Where that anchor came from: the row's category median, or the global one. */
     peer_basis: string;
     growth_pct: number;
     growth_multiplier: number;
@@ -121,7 +128,12 @@ export interface BoardRow {
   farm_steps: string[];
 }
 
-/** The dashboard's compact view of one row, with farm plans generated in the page. */
+/**
+ * The dashboard's compact view of one row, written to data.js. It carries everything the page
+ * renders and everything the page needs to recompute the row's implied value and regenerate its
+ * farm plan — the peer multiple at full precision included — plus one flag the board itself does
+ * not need: whether the row came in through the watchlist or up through the early radar.
+ */
 export interface RadarRow {
   rank: number;
   slug: string;
@@ -370,21 +382,62 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
-/** The category's one action, in the words a farmer can follow. */
+/**
+ * The category rules behind the farm plan's main action: the first rule whose words appear in the
+ * protocol's category (lowercased) wins, and each rule writes the action in the words a farmer can
+ * follow. A category no rule names falls through to the plain deposit at the end. The dashboard
+ * carries the same table, so the plan it generates in the page is the plan board.json holds.
+ */
+const ACTION_RULES: { words: string[]; write: (name: string, capital: number, chain: string) => string }[] = [
+  {
+    words: ['lend', 'cdp', 'collateral'],
+    write: (name, capital, chain) => `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`,
+  },
+  {
+    words: ['dex', 'yield', 'leveraged farm'],
+    write: (name, capital, chain) => `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`,
+  },
+  {
+    words: ['bridge'],
+    write: (name, capital, chain) => `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`,
+  },
+  {
+    words: ['staking', 'restak'],
+    write: (name, capital, chain) => `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`,
+  },
+  {
+    words: ['perpetual', 'derivative'],
+    write: (name, capital, chain) => `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`,
+  },
+  {
+    words: ['prediction'],
+    write: (name, capital) => `Fund $${capital} and place one market position on ${name}.`,
+  },
+  {
+    words: ['curator', 'allocator'],
+    write: (name, capital, chain) => `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`,
+  },
+  {
+    words: ['stable'],
+    write: (name, capital, chain) => `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`,
+  },
+  {
+    words: ['rwa'],
+    write: (name, capital, chain) => `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`,
+  },
+  {
+    words: ['insurance'],
+    write: (name, capital, chain) => `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`,
+  },
+];
+
+/** The category's one action, from the first matching rule, or a plain deposit when none matches. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  for (const rule of ACTION_RULES) {
+    if (rule.words.some((w) => c.includes(w))) return rule.write(p.name, capital, chain);
+  }
+  return `Deposit $${capital} of USDC into ${p.name} on ${chain} and keep the position open.`;
 }
 
 /** The weekly qualifying action, in the protocol's own category's terms. */

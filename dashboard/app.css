@@ -139,6 +139,21 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 8%
 .steps b { display: block; font-weight: 500; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 
+/* The radar's own touches: a sweep highlight on the first rows of the current view, a drawer that
+   slides in, and small reading comforts that cost no extra palette. */
+::selection { background: rgba(61, 220, 151, 0.35); }
+tbody tr:nth-child(-n+3) .name b { color: var(--accent); }
+tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.detail { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.detail::-webkit-scrollbar { width: 8px; }
+.detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+@keyframes sweep-in {
+  from { transform: translateX(24px); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.detail[open] { animation: sweep-in 180ms cubic-bezier(0, 0, 0.2, 1); }
+.formula { white-space: pre-line; }
+
 @media (max-width: 900px) {
   .shell { padding: var(--step-4); }
   .lede { grid-template-columns: 1fr; gap: var(--step-4); }

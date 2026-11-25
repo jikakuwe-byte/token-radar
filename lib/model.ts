@@ -425,12 +425,12 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       };
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm with ${p.name}, and keep its seed phrase offline.`,
+      text: `Set up one fresh wallet for ${p.name} alone, fund it only with what this farm needs, and keep its seed phrase offline on paper.`,
       cost: 'under $3 of gas for the first transaction',
       time: '5 minutes',
     },
     {
-      text: `Before approving anything, verify the contract address in ${p.name}'s own documentation and start with a $10 test transaction.`,
+      text: `Open ${p.name}'s own documentation, check the contract address it publishes there, and send a $10 test transaction before any real approval.`,
       cost: '$10 of test capital and about $1 of gas',
       time: '10 minutes',
     },
@@ -446,12 +446,12 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '10 minutes a week',
     },
     {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot, and check the protocol's points or rewards page every week.`,
+      text: `Keep the position open for at least ${hold} days, across more than one weekly snapshot, and look at the protocol's points or rewards page every week while you wait.`,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
     },
     {
-      text: `When a token or points conversion is announced, claim only from the link ${p.name} itself publishes, then write the wallet, the dates and every transaction in a farm log so you can unwind the position.`,
+      text: `If a token or points conversion is announced, claim only through the link ${p.name} itself publishes, then record the wallet, the dates and every transaction in a farm log so the position can be unwound cleanly.`,
       cost: 'no fee to check, and never pay to claim',
       time: '15 minutes',
     },
@@ -523,6 +523,37 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   return { board, radar };
 }
 
+/** A string field read leniently: the string itself, or null for anything else. */
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/** A numeric field read leniently: a finite number, or null for anything else. */
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** One protocol record out of the snapshot's array, with every optional field normalised. */
+function parseProtocol(v: unknown, i: number): SnapshotProtocol {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
+  const p = v as Record<string, unknown>;
+  if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
+    throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
+  }
+  return {
+    slug: p.slug,
+    name: p.name,
+    category: stringOrNull(p.category),
+    chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
+    tvl_usd: p.tvl_usd,
+    change_7d: numberOrNull(p.change_7d),
+    mcap_usd: numberOrNull(p.mcap_usd),
+    listed_at: stringOrNull(p.listed_at),
+    gecko_id: stringOrNull(p.gecko_id),
+    symbol: stringOrNull(p.symbol),
+  };
+}
+
 /** The snapshot out of a file's text, refused unless it is the shape the model scores. */
 export function parseSnapshot(text: string): Snapshot {
   let raw: unknown;
@@ -538,52 +569,67 @@ export function parseSnapshot(text: string): Snapshot {
   if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
   if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
   if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
-  const protocols = o.protocols.map((v, i) => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
-    const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
-    }
-    return {
-      slug: p.slug,
-      name: p.name,
-      category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
-      tvl_usd: p.tvl_usd,
-      change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
-      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
-    };
-  });
   return {
     as_of: o.as_of,
     source: o.source,
     floor_usd: o.floor_usd,
-    protocols,
+    protocols: o.protocols.map(parseProtocol),
     watchlist: o.watchlist as string[],
   };
 }
 
-/** Why a board is not one the gate will take, or null: coverage, ranks, order, one shared implied value, and farm steps. */
-export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
+/** The coverage issue, if any: every watchlist slug must sit on the board. */
+function coverageIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
-  if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
+  if (missing.length === 0) return null;
+  return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
+}
+
+/** The ranking issue, if any: ranks are exactly 1..n and implied value never rises down the board. */
+function rankingIssue(board: BoardRow[]): string | null {
   const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
   for (let i = 0; i < ranks.length; i++) if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
-  for (let i = 1; i < board.length; i++) if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${i + 1} outranks row ${i} on implied value`;
+  for (let i = 1; i < board.length; i++) {
+    if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${i + 1} outranks row ${i} on implied value`;
+  }
   if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {
     return `all ${board.length} rows share the same implied value $${board[0]!.implied_value_usd}: a board that ranks nothing by value is not a ranking`;
   }
+  return null;
+}
+
+/** One row's own issue, if any: a sane implied value and a farm plan inside the gate's shape. */
+function rowIssue(r: BoardRow): string | null {
+  const steps = r.farm_steps;
+  if (steps.length < 3 || steps.length > 12) return `${r.slug} has ${steps.length} farm steps`;
+  for (const s of steps) if (s.length < 20 || s.length > 600) return `${r.slug} has a farm step of ${s.length} characters`;
+  if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
+  return null;
+}
+
+/** Why a board is not one the gate will take, or null: coverage first, then the ranking, then each row. */
+export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
+  const coverage = coverageIssue(board, snapshot);
+  if (coverage !== null) return coverage;
+  const ranking = rankingIssue(board);
+  if (ranking !== null) return ranking;
   for (const r of board) {
-    const steps = r.farm_steps;
-    if (steps.length < 3 || steps.length > 12) return `${r.slug} has ${steps.length} farm steps`;
-    for (const s of steps) if (s.length < 20 || s.length > 600) return `${r.slug} has a farm step of ${s.length} characters`;
-    if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
+    const issue = rowIssue(r);
+    if (issue !== null) return issue;
   }
   return null;
+}
+
+/** The headline figures for a finished board and the snapshot it came from. */
+export function summarizeBoard(board: BoardRow[], snapshot: Snapshot): BoardSummary {
+  const watchlist = new Set(snapshot.watchlist);
+  return {
+    watchlist_size: snapshot.watchlist.length,
+    board_size: board.length,
+    early_size: board.filter((r) => !watchlist.has(r.slug)).length,
+    live_size: liveRows(snapshot).length,
+  };
 }
 
 /** A compact data.js: the dashboard's whole dataset as one script, no fetch and no network. */

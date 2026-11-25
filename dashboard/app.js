@@ -115,13 +115,13 @@
       ? { text: p.name + ' also runs on ' + p.chains[1] + ': repeat the position there with $' + half + ' so the farm is not a single-chain snapshot.', cost: 'about $' + half + ' of extra capital plus bridge and gas fees of about $5', time: '20 minutes' }
       : { text: 'Deepen the ' + chain + ' position once after two weeks: add 25% more capital if the first position settled without issues.', cost: 'about $' + Math.round(capital / 4) + ' of extra capital and $2 of gas', time: '10 minutes' };
     return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm with ' + p.name + ', and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: "Before approving anything, verify the contract address in " + p.name + "'s own documentation and start with a $10 test transaction.", cost: '$10 of test capital and about $1 of gas', time: '10 minutes' },
+      { text: 'Set up one fresh wallet for ' + p.name + ' alone, fund it only with what this farm needs, and keep its seed phrase offline on paper.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
+      { text: "Open " + p.name + "'s own documentation, check the contract address it publishes there, and send a $10 test transaction before any real approval.", cost: '$10 of test capital and about $1 of gas', time: '10 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
       breadth,
       { text: weeklyActionFor(p), cost: 'about $2 of gas a week', time: '10 minutes a week' },
-      { text: "Hold the position for at least " + hold + " days so the activity is counted in more than one snapshot, and check the protocol's points or rewards page every week.", cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: 'When a token or points conversion is announced, claim only from the link ' + p.name + ' itself publishes, then write the wallet, the dates and every transaction in a farm log so you can unwind the position.', cost: 'no fee to check, and never pay to claim', time: '15 minutes' }
+      { text: "Keep the position open for at least " + hold + " days, across more than one weekly snapshot, and look at the protocol's points or rewards page every week while you wait.", cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
+      { text: 'If a token or points conversion is announced, claim only through the link ' + p.name + ' itself publishes, then record the wallet, the dates and every transaction in a farm log so the position can be unwound cleanly.', cost: 'no fee to check, and never pay to claim', time: '15 minutes' }
     ].map(stepText);
   }
 
@@ -370,6 +370,16 @@
     }
   }
 
+  // What the board covers, stated once at the foot of the page: the watchlist is complete by
+  // construction, and the early rows are everything rankable below its floor, not a sample.
+  function coverageNote() {
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Coverage' }),
+      el('p', { class: 'sub', text: 'The snapshot names ' + DATA.watchlist_size + ' watchlist protocols; all ' + DATA.watchlist_size + ' are ranked above. Below the $' + Math.round(DATA.floor_usd / 1e6) + 'M floor the snapshot carries ' + DATA.early_size + ' more pre-token protocols that can be ranked — not an exchange, not a versioned pool of another protocol — and every one of them is on this board too. Protocols that already trade are never ranked here: their market cap is a fact, and the model only prices what has no price yet.' }),
+      el('p', { class: 'sub', text: 'Press / anywhere on the page to jump to the search box. Select any row for its model breakdown and farm plan.' })
+    );
+  }
+
   function render() {
     app.textContent = '';
     var shell = el('div', { class: 'shell' });
@@ -378,6 +388,7 @@
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
+    if (state.tab === 'pre-token') shell.appendChild(coverageNote());
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
@@ -388,5 +399,9 @@
   render();
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && dialog.open) dialog.close();
+    if (e.key === '/' && !dialog.open) {
+      var q = document.getElementById('q');
+      if (q && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+    }
   });
 })();

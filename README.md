@@ -6,6 +6,17 @@
 
 A token launch radar over a sealed DefiLlama snapshot (2026-11-14): every protocol that records no token of its own — all 40 watchlist protocols at or above the $50M TVL floor, plus every rankable pre-token protocol below it, 226 rows in all — ranked by implied launch value. The radar-2 model anchors each value to the market itself: the peer multiple is the median market-cap / TVL of the live protocols in the same category, read from the same snapshot, then adjusted for seven-day TVL growth, age with no token, and chain breadth. No protocol name is special-cased. The static dashboard (no network, no framework) is sortable and filterable, shows each protocol's full model breakdown, and gives a concrete seven-step farm plan with a cost and a time for every step.
 
+## How the model works
+
+One function scores every row, from the snapshot's figures alone:
+
+- **Peer anchor.** For each category, take every live-token protocol in the snapshot, compute its market cap / TVL, and use the median as the category's multiple (categories with fewer than four live peers use the global median, 0.2515x across 115 peers). Clamp to [0.08, 2.5] so no thin category can price a row at an extreme.
+- **Growth.** Seven-day TVL change, clamped to [-50%, +100%], weighted 0.55.
+- **Maturity.** 0.65 + 0.45 x (age in days / 1460), where age is the time since the protocol was first listed — how long it has operated with no token. An unlisted age counts as 365 days.
+- **Breadth.** 1 + 0.04 per extra chain, up to four: a protocol live on more chains has more users a token can be dropped to.
+
+`implied = round(TVL x peer x growth x maturity x breadth)`. The dashboard recomputes every row in the page and checks it against board.json, so the page's arithmetic and the board's data are visibly the same function. Farm plans are generated per protocol from its category, chains, TVL and age — seven steps, each with a cost and a time.
+
 ## Run it
 
 ```sh

@@ -29,10 +29,15 @@
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
   // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
   // The anchor is the row's peer multiple: the median market-cap / TVL of the live protocols in its
-  // category, read from the same snapshot by main.ts and carried on the row.
+  // category, shrunk toward the market-wide median by the weight its sample size earns, read from
+  // the same snapshot by main.ts and carried on the row. Growth counts in full to the soft knee
+  // and at the soft rate past it, exactly as main.ts counts it.
   function impliedOf(row, model) {
-    var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
-    var growthMult = 1 + (growth / 100) * model.growth_weight;
+    var raw = row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d;
+    var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, raw));
+    var a = Math.abs(growth);
+    var soft = a <= model.growth_soft_knee ? growth : (growth < 0 ? -1 : 1) * (model.growth_soft_knee + (a - model.growth_soft_knee) * model.growth_soft_rate);
+    var growthMult = 1 + (soft / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
     return Math.max(1, Math.round(row.tvl_usd * row.peer_multiple * growthMult * maturity * row.breadth_multiplier));
@@ -301,7 +306,7 @@
       );
       tbody.appendChild(tr);
     });
-    return el('div', { class: 'panel' },
+    return el('div', { class: 'panel board-panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
@@ -349,8 +354,9 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked. The anchor is not a fixed constant: it is the price the market already pays for TVL in protocols that do trade.' }),
       el('div', { class: 'formula' },
-        'peer = median( mcap / TVL ) of live peers in the row\'s category (median of all ' + DATA.peer_sample_size + ' live peers when a category has fewer than ' + m.peer_min_sample + '), clamped to [' + m.peer_floor + ', ' + m.peer_cap + ']' + '\n' +
-        'implied = round( tvl_usd x peer x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + min(chains - 1, ' + m.breadth_max_extra_chains + ') x ' + m.breadth_step + ') )'
+        'peer = w x median( mcap / TVL ) of live peers in the row\'s category + (1 - w) x the market-wide median, with w = n / (n + ' + m.peer_shrink_k + ') for the category\'s n live peers; a category with fewer than ' + m.peer_min_sample + ' live peers is not used at all — the market median of all ' + DATA.peer_sample_size + ' live peers anchors on its own; clamped to [' + m.peer_floor + ', ' + m.peer_cap + ']' + '\n' +
+        'growth = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + '), counted in full to ' + m.growth_soft_knee + '% and at ' + m.growth_soft_rate + 'x past it: a parabolic week is evidence, not proof' + '\n' +
+        'implied = round( tvl_usd x peer x (1 + growth / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + min(chains - 1, ' + m.breadth_max_extra_chains + ') x ' + m.breadth_step + ') )'
       ),
       el('p', { class: 'sub', text: 'TVL, seven-day growth, age and chains all come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The median live peer multiple across the whole snapshot is ' + DATA.global_peer_multiple + 'x TVL. Live-token protocols are set aside with their market caps shown, never mixed into this ranking.' })
     );

@@ -7,11 +7,12 @@
 //
 // The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
 // and dashboard/app.js read /output/data.js, which this program writes from the same board. The
-// radar-2 model anchors every implied value to the median market-cap / TVL of the live protocols in
-// the same category, read from the snapshot itself, then adjusts for seven-day growth, age with no
-// token and chain breadth. The page covers the whole watchlist plus every rankable pre-token
-// protocol below its floor, states the model in full and gives every protocol a seven-step farm
-// plan with costs and times.
+// radar-3 model anchors every implied value to the median market-cap / TVL of the live protocols in
+// the same category, read from the snapshot itself and shrunk toward the market-wide median by the
+// weight the category's sample size earns, then adjusts for seven-day growth (counted in full only
+// to +50%: a parabolic week is evidence, not proof), age with no token and chain breadth. The page
+// covers the whole watchlist plus every rankable pre-token protocol below its floor, states the
+// model in full and gives every protocol a seven-step farm plan with costs and times.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json

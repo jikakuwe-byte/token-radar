@@ -9,11 +9,14 @@
 // Implied value follows only from the snapshot's own figures. The anchor is not a fixed multiple:
 // it is what the market already pays for a dollar of TVL in live protocols like this one.
 //
-//   peerMult   = median(mcap_usd / tvl_usd) over the snapshot's live-token protocols in the same
-//                category (at least PEER_MIN_SAMPLE of them), else the median over every live
-//                protocol, clamped to [PEER_FLOOR, PEER_CAP]
-//   growth     = clamp(change_7d, -50, 100) per cent
-//   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
+//   peerMult   = the category's median(mcap_usd / tvl_usd) over its live-token protocols (at
+//                least PEER_MIN_SAMPLE of them), shrunk toward the median over every live
+//                protocol: the category earns weight w = n / (n + PEER_SHRINK_K) for its n
+//                peers and the market median carries the rest, clamped to [PEER_FLOOR,
+//                PEER_CAP]; below the sample floor the market median anchors on its own
+//   growth     = clamp(change_7d, -50, 100) per cent, counted in full up to GROWTH_SOFT_KNEE
+//                and at GROWTH_SOFT_RATE past it: a parabolic week is evidence, not proof
+//   growthMult = 1 + (soft(growth) / 100) x GROWTH_WEIGHT
 //   maturity   = 0.65 + min(age_days, 1460) / 1460 x 0.45   (age_days unknown: 365)
 //   breadth    = 1 + min(chains - 1, 4) x 0.04   (a protocol live on more chains has more users
 //                a token can be dropped to)
@@ -54,6 +57,10 @@ export interface ModelConstants {
   growth_floor: number;
   /** The growth clamp's top: a parabolic week counts at most this much for a row. */
   growth_cap: number;
+  /** The growth, in per cent, up to which the week counts in full; past it the count softens. */
+  growth_soft_knee: number;
+  /** How much each point of growth past the soft knee counts: half a point, not a whole one. */
+  growth_soft_rate: number;
   /** The maturity multiplier of a protocol listed today. */
   maturity_floor: number;
   /** How much maturity a full `maturity_days` of age adds on top of the floor. */
@@ -68,6 +75,8 @@ export interface ModelConstants {
   peer_cap: number;
   /** How many live protocols a category needs before its own median anchors its rows. */
   peer_min_sample: number;
+  /** The shrinkage constant: a category's own median earns weight n / (n + this) for its n peers. */
+  peer_shrink_k: number;
   /** The breadth multiplier's gain for each extra chain, up to the cap below. */
   breadth_step: number;
   /** How many extra chains the breadth multiplier rewards. */
@@ -78,6 +87,8 @@ export const MODEL: ModelConstants = {
   growth_weight: 0.55,
   growth_floor: -50,
   growth_cap: 100,
+  growth_soft_knee: 50,
+  growth_soft_rate: 0.5,
   maturity_floor: 0.65,
   maturity_range: 0.45,
   maturity_days: 1460,
@@ -85,12 +96,13 @@ export const MODEL: ModelConstants = {
   peer_floor: 0.08,
   peer_cap: 2.5,
   peer_min_sample: 4,
+  peer_shrink_k: 6,
   breadth_step: 0.04,
   breadth_max_extra_chains: 4,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 220;
@@ -228,6 +240,8 @@ function median(values: number[]): number {
 /** What the snapshot's live-token protocols say a dollar of TVL is worth, per category and overall. */
 export interface PeerMultiples {
   byCategory: Map<string, number>;
+  /** How many live peers stand behind each category median: the shrinkage weight's evidence. */
+  byCategoryCount: Map<string, number>;
   global: number;
   sampleSize: number;
 }
@@ -237,7 +251,10 @@ export interface PeerMultiples {
  * market cap), the ratio mcap / TVL; the median of a category's ratios when the category has at
  * least `peer_min_sample` live protocols, and the median of all of them as the fallback. Ratios
  * outside [0.01, 20] are dropped before the median: a stale or broken record must not anchor a
- * whole category. The multiple a row finally uses is clamped to [peer_floor, peer_cap].
+ * whole category. The count behind each category median is kept beside it: peerMultipleFor
+ * shrinks the category median toward the market median by exactly the weight that count earns,
+ * so a thin category cannot price its rows at an extreme on four observations. The multiple a
+ * row finally uses is clamped to [peer_floor, peer_cap].
  */
 export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): PeerMultiples {
   const ratios: number[] = [];
@@ -253,19 +270,45 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
     else list.push(ratio);
   }
   const medians = new Map<string, number>();
+  const counts = new Map<string, number>();
   for (const [category, list] of byCategory) {
-    if (list.length >= model.peer_min_sample) medians.set(category, median(list));
+    if (list.length >= model.peer_min_sample) {
+      medians.set(category, median(list));
+      counts.set(category, list.length);
+    }
   }
-  return { byCategory: medians, global: ratios.length > 0 ? median(ratios) : model.peer_floor, sampleSize: ratios.length };
+  return { byCategory: medians, byCategoryCount: counts, global: ratios.length > 0 ? median(ratios) : model.peer_floor, sampleSize: ratios.length };
 }
 
 /** The peer multiple one protocol is anchored to, and where it came from. */
 export function peerMultipleFor(protocol: SnapshotProtocol, peers: PeerMultiples, model: ModelConstants = MODEL): { multiple: number; basis: string } {
   const category = protocol.category ?? 'Other';
   const own = peers.byCategory.get(category);
-  const raw = own ?? peers.global;
-  const multiple = Math.min(model.peer_cap, Math.max(model.peer_floor, raw));
-  return { multiple, basis: own !== undefined ? `median of ${category} live peers` : 'median of all live peers' };
+  if (own === undefined) {
+    const multiple = Math.min(model.peer_cap, Math.max(model.peer_floor, peers.global));
+    return { multiple, basis: 'median of all live peers' };
+  }
+  // Shrinkage: the category's own median speaks with weight n / (n + peer_shrink_k) for its n
+  // live peers, and the market-wide median carries the rest. Four peers earn 40% of the say;
+  // thirty earn over 80%. A category is never ignored and never believed outright.
+  const n = peers.byCategoryCount.get(category) ?? 0;
+  const w = n / (n + model.peer_shrink_k);
+  const blended = w * own + (1 - w) * peers.global;
+  const multiple = Math.min(model.peer_cap, Math.max(model.peer_floor, blended));
+  return { multiple, basis: `median of ${category} live peers, shrunk toward the market median (n=${n})` };
+}
+
+/**
+ * The growth the model counts, from the week's raw change: clamped to [growth_floor,
+ * growth_cap], counted in full up to the soft knee and at growth_soft_rate past it. A protocol
+ * that doubled in a week has given evidence, not proof: past +50% each further point counts
+ * half, so one parabolic week cannot carry a row past steadier peers on its own.
+ */
+export function softGrowth(rawGrowth: number, model: ModelConstants): number {
+  const g = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
+  const a = Math.abs(g);
+  if (a <= model.growth_soft_knee) return g;
+  return Math.sign(g) * (model.growth_soft_knee + (a - model.growth_soft_knee) * model.growth_soft_rate);
 }
 
 /** The multipliers and the implied value one protocol gets under `model`. */
@@ -273,7 +316,7 @@ export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: Mo
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  const growthMult = 1 + (softGrowth(rawGrowth, model) / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const extraChains = Math.min(Math.max(protocol.chains.length - 1, 0), model.breadth_max_extra_chains);
